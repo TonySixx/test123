@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="cs">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://www.gstatic.com/firebasejs/9.1.3/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.1.3/firebase-firestore.js"></script>
+  <title>Kouzelné pohádkové bludiště</title>
+  <style>
+    @import url("https://fonts.googleapis.com/css2?family=Nunito:wght@400;700&display=swap");
+
+    body {
+      font-family: "Nunito", sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+      overflow: hidden;
+    }
+
+    .game-container {
+      text-align: center;
+      background: rgba(255, 255, 255, 0.8);
+      border-radius: 20px;
+      padding: 30px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+    }
+
+    h1 {
+      margin-top: 0;
+      color: #4a4a4a;
+      font-size: 2em;
+      margin-bottom: 10px;
+      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    #gameCanvas {
+      border: 4px solid #4a4a4a;
+      border-radius: 10px;
+      box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+    }
+
+    .controls {
+      margin-top: 20px;
+    }
+
+    button {
+      background: linear-gradient(45deg,
+          #ff9a8b 0%,
+          #ff6a88 55%,
+          #ff99ac 100%);
+      border: none;
+      color: white;
+      padding: 15px 32px;
+      text-align: center;
+      text-decoration: none;
+      display: inline-block;
+      font-size: 16px;
+      margin: 4px 2px;
+      cursor: pointer;
+      border-radius: 50px;
+      transition: all 0.3s ease;
+      box-shadow: 0 5px 15px rgba(242, 97, 103, 0.4);
+    }
+
+    button:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 20px rgba(242, 97, 103, 0.6);
+    }
+
+    input {
+      padding: 12px 20px;
+      margin: 8px 0;
+      box-sizing: border-box;
+      border: 2px solid #ccc;
+      border-radius: 50px;
+      font-size: 16px;
+      transition: all 0.3s ease;
+    }
+
+    input:focus {
+      border-color: #ff6a88;
+      outline: none;
+      box-shadow: 0 0 10px rgba(255, 106, 136, 0.5);
+    }
+
+    p {
+      font-size: 1.2em;
+      color: #4a4a4a;
+      margin: 10px 0;
+    }
+
+    #moveCount,
+    #keyCount {
+      font-weight: bold;
+      color: #ff6a88;
+    }
+
+    @keyframes float {
+      0% {
+        transform: translateY(0px);
+      }
+
+      50% {
+        transform: translateY(-10px);
+      }
+
+      100% {
+        transform: translateY(0px);
+      }
+    }
+
+    .floating {
+      animation: float 3s ease-in-out infinite;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="game-container">
+    <h1 class="floating">Kouzelné pohádkové bludiště</h1>
+    <canvas id="gameCanvas" width="700" height="700"></canvas>
+    <div class="controls">
+      <input type="text" id="playerName" placeholder="Zadejte své jméno" />
+      <input type="text" id="seedInput" placeholder="Zadejte kouzelné slovo" />
+      <button onclick="generateMaze()">Vyčarovat nové bludiště</button>
+    </div>
+    <p>Kouzelnické kroky: <span id="moveCount">0</span></p>
+    <p>Kouzelné klíče: <span id="keyCount">0</span></p>
+    <button onclick="showScores()">Zobrazit skóre</button>
+    <button onclick="showOnlineScores()">Zobrazit online skóre</button>
+  </div>
+  <script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    let size;
+    let cellSize;
+    let backgroundGradient;
+    let totalKeys;
+
+    let maze = [];
+    let playerPos = { x: 0, y: 0 };
+    let goalPos = { x: 0, y: 0 };
+    let specialItems = [];
+    let moveCount = 0;
+    let extraMove = false;
+    let randomFunction;
+    let teleports = [];
+    let movingWalls = [];
+    let keys = [];
+    let collectedKeys = 0;
+
+     // Your web app's Firebase configuration
+  const firebaseConfig = {
+    apiKey: "AIzaSyClj7SMzXPKc-JJV74AnsbVcmXoa6TSLzE",
+    authDomain: "fairymaze-dc586.firebaseapp.com",
+    projectId: "fairymaze-dc586",
+    storageBucket: "fairymaze-dc586.appspot.com",
+    messagingSenderId: "201345196258",
+    appId: "1:201345196258:web:1512b09ea9b9a4c97f7ebb",
+    measurementId: "G-6X386PQHDJ"
+  };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
+    function resizeCanvas() {
+      const gameContainer = document.querySelector(".game-container");
+      const controls = document.querySelector(".controls");
+      const moveCount = document.querySelector("#moveCount").parentElement;
+      const keyCount = document.querySelector("#keyCount").parentElement;
+      const button = document.querySelector(
+        ".game-container button:last-of-type"
+      );
+
+      const controlsHeight =
+        controls.clientHeight +
+        moveCount.clientHeight +
+        keyCount.clientHeight +
+        button.clientHeight +
+        200; // Zahrneme výšku ovládacích prvků a nějaký padding
+      const availableHeight = window.innerHeight - controlsHeight;
+      const availableWidth = window.innerWidth * 0.9; // Zahrneme nějaký padding
+
+      // Udržení poměru stran 1:1
+      const canvasSize = Math.min(availableWidth, availableHeight);
+
+      canvas.width = canvasSize;
+      canvas.height = canvasSize;
+
+      // Přepočítání velikosti buněk
+      if (size) {
+        cellSize = canvas.width / size;
+        drawMaze(); // Překreslíme bludiště s novou velikostí
+      }
+    }
+
+    function saveOnlineScore(seedText, moveCount) {
+      const playerName = document.getElementById("playerName").value;
+      db.collection("scores").doc(seedText).get().then(doc => {
+        if (!doc.exists || moveCount < doc.data().moveCount) {
+          db.collection("scores").doc(seedText).set({
+            playerName: playerName,
+            moveCount: moveCount,
+            seed: seedText
+          });
+        }
+      });
+    }
+
+    function saveScore(seedText, moveCount) {
+      let scores = JSON.parse(localStorage.getItem("mazeScores")) || {};
+      if (!scores[seedText] || moveCount < scores[seedText]) {
+        scores[seedText] = moveCount;
+        localStorage.setItem("mazeScores", JSON.stringify(scores));
+        saveOnlineScore(seedText, moveCount);
+      }
+    }
+
+    function showOnlineScores() {
+      db.collection("scores").orderBy("moveCount").limit(10).get().then(snapshot => {
+        let scoresTable = document.createElement("div");
+        scoresTable.style.position = "fixed";
+        scoresTable.style.top = "50%";
+        scoresTable.style.left = "50%";
+        scoresTable.style.transform = "translate(-50%, -50%)";
+        scoresTable.style.backgroundColor = "white";
+        scoresTable.style.padding = "20px";
+        scoresTable.style.borderRadius = "10px";
+        scoresTable.style.boxShadow = "0 0 10px rgba(0,0,0,0.5)";
+        scoresTable.style.maxHeight = "80vh";
+        scoresTable.style.overflowY = "auto";
+
+        let table = '<table style="border-collapse: collapse;"><tr><th style="padding: 10px; border: 1px solid black;">Jméno hráče</th><th style="padding: 10px; border: 1px solid black;">Kouzelné slovo</th><th style="padding: 10px; border: 1px solid black;">Nejlepší skóre</th></tr>';
+        snapshot.forEach(doc => {
+          const data = doc.data();
+          table += `<tr><td style="padding: 10px; border: 1px solid black;">${data.playerName}</td><td style="padding: 10px; border: 1px solid black;">${data.seed}</td><td style="padding: 10px; border: 1px solid black;">${data.moveCount}</td></tr>`;
+        });
+        table += "</table>";
+
+        scoresTable.innerHTML = table + '<br><button onclick="this.parentNode.remove()">Zavřít</button>';
+        document.body.appendChild(scoresTable);
+      });
+    }
+
+    function showScores() {
+      let scores = JSON.parse(localStorage.getItem("mazeScores")) || {};
+      let scoresTable = document.createElement("div");
+      scoresTable.style.position = "fixed";
+      scoresTable.style.top = "50%";
+      scoresTable.style.left = "50%";
+      scoresTable.style.transform = "translate(-50%, -50%)";
+      scoresTable.style.backgroundColor = "white";
+      scoresTable.style.padding = "20px";
+      scoresTable.style.borderRadius = "10px";
+      scoresTable.style.boxShadow = "0 0 10px rgba(0,0,0,0.5)";
+      scoresTable.style.maxHeight = "80vh";
+      scoresTable.style.overflowY = "auto";
+
+      let table =
+        '<table style="border-collapse: collapse;"><tr><th style="padding: 10px; border: 1px solid black;">Kouzelné slovo</th><th style="padding: 10px; border: 1px solid black;">Nejlepší skóre</th></tr>';
+      for (let seed in scores) {
+        table += `<tr><td style="padding: 10px; border: 1px solid black;">${seed}</td><td style="padding: 10px; border: 1px solid black;">${scores[seed]}</td></tr>`;
+      }
+      table += "</table>";
+
+      scoresTable.innerHTML =
+        table +
+        '<br><button onclick="this.parentNode.remove()">Zavřít</button>';
+      document.body.appendChild(scoresTable);
+    }
+
+    function createRandomFunction(seed) {
+      let x = Math.sin(seed) * 10000;
+      return function () {
+        x = Math.sin(x) * 10000;
+        return x - Math.floor(x);
+      };
+    }
+
+    function generateMaze() {
+      resizeCanvas(); // Ujistíme se, že canvas má správnou velikost před vygenerováním bludiště
+      const seedText =
+        document.getElementById("seedInput").value || "default";
+      let seed = 0;
+      for (let i = 0; i < seedText.length; i++) {
+        seed += seedText.charCodeAt(i);
+      }
+      randomFunction = createRandomFunction(seed);
+
+      size = Math.floor(randomFunction() * 21) + 20;
+      cellSize = canvas.width / size;
+
+      const keyCount = Math.floor(randomFunction() * 3) + 3;
+
+      const hue1 = Math.floor(randomFunction() * 360);
+      const hue2 = (hue1 + 180) % 360;
+      document.body.style.background = `linear-gradient(135deg, hsl(${hue1}, 70%, 80%) 0%, hsl(${hue2}, 70%, 60%) 100%)`;
+
+      backgroundGradient = ctx.createLinearGradient(
+        0,
+        0,
+        canvas.width,
+        canvas.height
+      );
+      backgroundGradient.addColorStop(0, `hsl(${hue1}, 70%, 80%)`);
+      backgroundGradient.addColorStop(1, `hsl(${hue2}, 70%, 60%)`);
+
+      maze = Array(size)
+        .fill()
+        .map(() => Array(size).fill(1));
+
+      function carvePassage(x, y) {
+        const directions = [
+          [0, -1],
+          [1, 0],
+          [0, 1],
+          [-1, 0],
+        ];
+        directions.sort(() => randomFunction() - 0.5);
+
+        for (let [dx, dy] of directions) {
+          const nx = x + dx * 2;
+          const ny = y + dy * 2;
+
+          if (
+            nx >= 0 &&
+            nx < size &&
+            ny >= 0 &&
+            ny < size &&
+            maze[ny][nx] === 1
+          ) {
+            maze[y + dy][x + dx] = 0;
+            maze[ny][nx] = 0;
+            carvePassage(nx, ny);
+          }
+        }
+      }
+
+      maze[0][0] = 0;
+      carvePassage(0, 0);
+
+      if (maze[size - 1][size - 1] === 1) {
+        let x = size - 1;
+        let y = size - 1;
+        while (maze[y][x] === 1) {
+          maze[y][x] = 0;
+          if (x > 0 && maze[y][x - 1] === 0) {
+            x--;
+          } else if (y > 0 && maze[y - 1][x] === 0) {
+            y--;
+          } else if (x > 1) {
+            maze[y][x - 1] = 0;
+            x -= 2;
+          } else if (y > 1) {
+            maze[y - 1][x] = 0;
+            y -= 2;
+          }
+        }
+      }
+
+      totalKeys = Math.floor(randomFunction() * 3) + 3;
+
+      playerPos = { x: 0, y: 0 };
+      goalPos = { x: size - 1, y: size - 1 };
+      specialItems = [];
+      teleports = [];
+      movingWalls = [];
+      keys = [];
+      collectedKeys = 0;
+
+      for (let i = 0; i < 2; i++) {
+        let x1, y1, x2, y2;
+        do {
+          x1 = Math.floor(randomFunction() * (size - 2)) + 1;
+          y1 = Math.floor(randomFunction() * (size - 2)) + 1;
+          x2 = Math.floor(randomFunction() * (size - 2)) + 1;
+          y2 = Math.floor(randomFunction() * (size - 2)) + 1;
+        } while (
+          maze[y1][x1] === 1 ||
+          maze[y2][x2] === 1 ||
+          (x1 === x2 && y1 === y2)
+        );
+        teleports.push({
+          x1,
+          y1,
+          x2,
+          y2,
+          colors: { red: 255 * (1 - i), green: 255 * i, blue: 255 * (1 - i) },
+        });
+      }
+
+      movingWalls = [];
+      let potentialPositions = [];
+      for (let y = 1; y < size - 1; y++) {
+        for (let x = 1; x < size - 1; x++) {
+          if (maze[y][x] === 0) {
+            let openDirections = 0;
+            if (maze[y - 1][x] === 0) openDirections++;
+            if (maze[y + 1][x] === 0) openDirections++;
+            if (maze[y][x - 1] === 0) openDirections++;
+            if (maze[y][x + 1] === 0) openDirections++;
+            if (openDirections >= 3) {
+              potentialPositions.push({ x, y });
+            }
+          }
+        }
+      }
+
+      for (let i = 0; i < 3 && potentialPositions.length > 0; i++) {
+        let index = Math.floor(randomFunction() * potentialPositions.length);
+        let pos = potentialPositions[index];
+        movingWalls.push({
+          x: pos.x,
+          y: pos.y,
+          direction: Math.floor(randomFunction() * 4),
+          moveCounter: 0,
+        });
+        potentialPositions.splice(index, 1);
+      }
+
+      for (let i = 0; i < totalKeys; i++) {
+        let x, y;
+        do {
+          x = Math.floor(randomFunction() * (size - 2)) + 1;
+          y = Math.floor(randomFunction() * (size - 2)) + 1;
+        } while (
+          maze[y][x] === 1 ||
+          keys.some((key) => key.x === x && key.y === y)
+        );
+        keys.push({ x, y });
+      }
+
+      moveCount = 0;
+      collectedKeys = 0;
+      document.getElementById("moveCount").textContent = moveCount;
+      updateKeyCount();
+
+      drawMaze();
+    }
+
+    function updateKeyCount() {
+      document.getElementById(
+        "keyCount"
+      ).textContent = `${collectedKeys}/${totalKeys}`;
+    }
+
+    function drawMaze() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = backgroundGradient;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          if (maze[y][x] === 1) {
+            ctx.fillStyle = "#5D4037";
+            ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+            ctx.strokeStyle = "#3E2723";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x * cellSize, y * cellSize, cellSize, cellSize);
+          }
+        }
+      }
+
+      for (let teleport of teleports) {
+        const drawTeleportCircle = (x, y, colorR, colorG, colorB) => {
+          ctx.beginPath();
+          ctx.arc(
+            x * cellSize + cellSize / 2,
+            y * cellSize + cellSize / 2,
+            cellSize / 3,
+            0,
+            2 * Math.PI
+          );
+          const glowGradient = ctx.createRadialGradient(
+            x * cellSize + cellSize / 2,
+            y * cellSize + cellSize / 2,
+            0,
+            x * cellSize + cellSize / 2,
+            y * cellSize + cellSize / 2,
+            cellSize / 2
+          );
+          glowGradient.addColorStop(
+            0,
+            `rgba(${colorR}, ${colorG}, ${colorB}, 1)`
+          );
+          glowGradient.addColorStop(
+            1,
+            `rgba(${colorR}, ${colorG}, ${colorB}, 0)`
+          );
+          ctx.fillStyle = glowGradient;
+          ctx.fill();
+        };
+
+        drawTeleportCircle(
+          teleport.x1,
+          teleport.y1,
+          teleport.colors.red,
+          teleport.colors.green,
+          teleport.colors.blue
+        );
+        drawTeleportCircle(
+          teleport.x2,
+          teleport.y2,
+          teleport.colors.red,
+          teleport.colors.green,
+          teleport.colors.blue
+        );
+      }
+
+      const time = new Date().getTime() * 0.001;
+      for (let wall of movingWalls) {
+        const pulseSize = Math.sin(time * 2) * 2;
+        ctx.fillStyle = "#FF5252";
+        ctx.fillRect(
+          wall.x * cellSize - pulseSize,
+          wall.y * cellSize - pulseSize,
+          cellSize + pulseSize * 2,
+          cellSize + pulseSize * 2
+        );
+      }
+
+      let keyPadding = cellSize / 5;
+      for (let key of keys) {
+        ctx.fillStyle = "gold";
+        ctx.beginPath();
+        ctx.moveTo(
+          key.x * cellSize + cellSize / 2,
+          key.y * cellSize + keyPadding
+        );
+        ctx.lineTo(
+          key.x * cellSize + cellSize - keyPadding,
+          key.y * cellSize + cellSize - keyPadding
+        );
+        ctx.lineTo(
+          key.x * cellSize + keyPadding,
+          key.y * cellSize + cellSize - keyPadding
+        );
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = "white";
+        ctx.beginPath();
+        ctx.arc(
+          key.x * cellSize +
+          cellSize / 2 +
+          (Math.sin(time * 5) * cellSize) / 8,
+          key.y * cellSize +
+          cellSize / 2 +
+          (Math.cos(time * 5) * cellSize) / 8,
+          cellSize / 12,
+          0,
+          2 * Math.PI
+        );
+        ctx.fill();
+      }
+
+      const goalGradient = ctx.createRadialGradient(
+        goalPos.x * cellSize + cellSize / 2,
+        goalPos.y * cellSize + cellSize / 2,
+        0,
+        goalPos.x * cellSize + cellSize / 2,
+        goalPos.y * cellSize + cellSize / 2,
+        cellSize
+      );
+      goalGradient.addColorStop(0, "rgba(255, 215, 0, 1)");
+      goalGradient.addColorStop(1, "rgba(255, 215, 0, 0)");
+      ctx.fillStyle = goalGradient;
+      ctx.fillRect(
+        goalPos.x * cellSize,
+        goalPos.y * cellSize,
+        cellSize,
+        cellSize
+      );
+
+      ctx.fillStyle = "#4169E1";
+      ctx.beginPath();
+      ctx.arc(
+        playerPos.x * cellSize + cellSize / 2,
+        playerPos.y * cellSize + cellSize / 2,
+        cellSize / 3,
+        0,
+        2 * Math.PI
+      );
+      ctx.fill();
+
+      const playerGradient = ctx.createRadialGradient(
+        playerPos.x * cellSize + cellSize / 2,
+        playerPos.y * cellSize + cellSize / 2,
+        0,
+        playerPos.x * cellSize + cellSize / 2,
+        playerPos.y * cellSize + cellSize / 2,
+        cellSize / 2
+      );
+      playerGradient.addColorStop(0, "rgba(65, 105, 225, 0.5)");
+      playerGradient.addColorStop(1, "rgba(65, 105, 225, 0)");
+      ctx.fillStyle = playerGradient;
+      ctx.beginPath();
+      ctx.arc(
+        playerPos.x * cellSize + cellSize / 2,
+        playerPos.y * cellSize + cellSize / 2,
+        cellSize / 2,
+        0,
+        2 * Math.PI
+      );
+      ctx.fill();
+    }
+
+    function movePlayer(dx, dy) {
+      const newX = playerPos.x + dx;
+      const newY = playerPos.y + dy;
+
+      const collidesWithMovingWall = movingWalls.some(
+        (wall) => wall.x === newX && wall.y === newY
+      );
+
+      if (
+        newX >= 0 &&
+        newX < size &&
+        newY >= 0 &&
+        newY < size &&
+        maze[newY][newX] === 0 &&
+        !collidesWithMovingWall
+      ) {
+        playerPos.x = newX;
+        playerPos.y = newY;
+        moveCount++;
+        document.getElementById("moveCount").textContent = moveCount;
+
+        for (let teleport of teleports) {
+          if (teleport.x1 === newX && teleport.y1 === newY) {
+            playerPos.x = teleport.x2;
+            playerPos.y = teleport.y2;
+            break;
+          } else if (teleport.x2 === newX && teleport.y2 === newY) {
+            playerPos.x = teleport.x1;
+            playerPos.y = teleport.y1;
+            break;
+          }
+        }
+
+        const keyIndex = keys.findIndex(
+          (key) => key.x === playerPos.x && key.y === playerPos.y
+        );
+        if (keyIndex !== -1) {
+          keys.splice(keyIndex, 1);
+          collectedKeys++;
+          updateKeyCount();
+        }
+
+        if (playerPos.x === goalPos.x && playerPos.y === goalPos.y) {
+          if (collectedKeys === totalKeys) {
+            alert(
+              `Gratuluji! Dosáhli jste cíle za ${moveCount} tahů a sebrali všechny klíče!`
+            );
+            saveScore(document.getElementById("seedInput").value, moveCount);
+          } else {
+            alert(
+              `Musíte sebrat všechny klíče, než můžete dokončit bludiště!`
+            );
+          }
+        }
+
+        for (let wall of movingWalls) {
+          wall.moveCounter++;
+          if (wall.moveCounter >= 3) {
+            wall.moveCounter = 0;
+            const directions = [
+              [0, -1],
+              [1, 0],
+              [0, 1],
+              [-1, 0],
+            ];
+            let validDirections = [];
+
+            for (let i = 0; i < 4; i++) {
+              const [dx, dy] = directions[i];
+              const newWallX = wall.x + dx;
+              const newWallY = wall.y + dy;
+
+              if (
+                newWallX >= 0 &&
+                newWallX < size &&
+                newWallY >= 0 &&
+                newWallY < size &&
+                maze[newWallY][newWallX] === 0 &&
+                !(newWallX === playerPos.x && newWallY === playerPos.y) &&
+                !teleports.some(
+                  (t) =>
+                    (t.x1 === newWallX && t.y1 === newWallY) ||
+                    (t.x2 === newWallX && t.y2 === newWallY)
+                ) &&
+                !keys.some((k) => k.x === newWallX && k.y === newWallY) &&
+                !(newWallX === goalPos.x && newWallY === goalPos.y)
+              ) {
+                validDirections.push(i);
+              }
+            }
+
+            if (validDirections.length > 0) {
+              wall.direction =
+                validDirections[
+                Math.floor(randomFunction() * validDirections.length)
+                ];
+              const [dx, dy] = directions[wall.direction];
+              wall.x += dx;
+              wall.y += dy;
+            }
+          }
+        }
+
+        drawMaze();
+      }
+    }
+
+    function animateMaze() {
+      drawMaze();
+      requestAnimationFrame(animateMaze);
+    }
+
+    document.addEventListener("keydown", (event) => {
+      const key = event.key;
+      let dx = 0,
+        dy = 0;
+
+      if (key === "ArrowRight") dx = 1;
+      else if (key === "ArrowLeft") dx = -1;
+      else if (key === "ArrowDown") dy = 1;
+      else if (key === "ArrowUp") dy = -1;
+
+      if (dx !== 0 || dy !== 0) {
+        movePlayer(dx, dy);
+      }
+    });
+
+    window.onload = function () {
+      resizeCanvas();
+      generateMaze();
+      animateMaze();
+      document.getElementById("playerName").value = localStorage.getItem("playerName") || "";
+    };
+
+    document.getElementById("playerName").addEventListener("input", function () {
+      localStorage.setItem("playerName", this.value);
+    });
+
+    window.addEventListener("resize", resizeCanvas);
+  </script>
+</body>
+
+</html>
